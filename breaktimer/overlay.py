@@ -61,8 +61,9 @@ def _fmt(seconds: float) -> str:
 class Banner:
     """Small always-on-top notice: 'Break in 0:58 — wrap up'."""
 
-    def __init__(self, root: tk.Tk, on_start_now):
+    def __init__(self, root: tk.Tk, cfg, on_start_now):
         self.root = root
+        self.cfg = cfg
         self.on_start_now = on_start_now
         self.win = None
 
@@ -83,6 +84,12 @@ class Banner:
         )
         button.pack(side="left")
         button.bind("<Button-1>", lambda _e: self.on_start_now())
+        # Slim progress bar along the bottom, draining as the break nears.
+        self.bar = tk.Canvas(self.win, height=3, bg="#2a3138",
+                             highlightthickness=0)
+        self.bar.pack(fill="x")
+        self.bar_fill = self.bar.create_rectangle(0, 0, 0, 3, width=0,
+                                                  fill=ACCENT)
         self.win.update_idletasks()
         width = self.win.winfo_reqwidth()
         x = (self.win.winfo_screenwidth() - width) // 2
@@ -95,6 +102,10 @@ class Banner:
         self.label.configure(
             text=f"✋  Break in {_fmt(remaining)} — wrap up your thought", fg=color
         )
+        frac = remaining / max(self.cfg.warning_seconds, 1)
+        self.bar.itemconfigure(self.bar_fill, fill=color)
+        self.bar.coords(self.bar_fill, 0, 0,
+                        int(self.win.winfo_width() * frac), 3)
         self.win.attributes("-topmost", True)
         self.win.lift()
 
@@ -188,11 +199,22 @@ class BreakOverlay:
             bg=BG, fg="#9aa7b0", font=("Segoe UI", 13),
         ).pack(pady=(0, 24))
 
-        self.countdown = tk.Label(
-            center, text=_fmt(duration), bg=BG, fg=ACCENT,
-            font=("Segoe UI", 72, "bold"),
+        # Countdown inside a draining progress ring.
+        self.total = max(duration, 1)
+        size, pad, width = 240, 12, 10
+        self.ring = tk.Canvas(center, width=size, height=size, bg=BG,
+                              highlightthickness=0)
+        self.ring.pack(pady=(0, 28))
+        self.ring.create_oval(pad, pad, size - pad, size - pad,
+                              outline="#232a31", width=width)
+        self.ring_arc = self.ring.create_arc(
+            pad, pad, size - pad, size - pad, start=90, extent=-359.9,
+            style="arc", outline=ACCENT, width=width,
         )
-        self.countdown.pack(pady=(0, 28))
+        self.ring_text = self.ring.create_text(
+            size / 2, size / 2, text=_fmt(duration), fill=ACCENT,
+            font=("Segoe UI", 44, "bold"),
+        )
 
         card = tk.Frame(center, bg="#1a2128", padx=28, pady=20)
         card.pack(pady=(0, 30))
@@ -242,7 +264,10 @@ class BreakOverlay:
     def update(self, remaining: float) -> None:
         if self.win is None:
             return
-        self.countdown.configure(text=_fmt(remaining))
+        self.ring.itemconfigure(self.ring_text, text=_fmt(remaining))
+        self.ring.itemconfigure(
+            self.ring_arc, extent=-359.9 * min(remaining / self.total, 1.0)
+        )
         # Rotate the stretch every 45 seconds.
         elapsed = int(time.monotonic() - self.shown_at)
         index = elapsed // 45

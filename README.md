@@ -11,7 +11,10 @@ stretch to do while you wait.
 
 ## How a cycle feels
 
-1. **Working** — a tray icon quietly shows time until your next break.
+1. **Working** — the tray icon *is* the timer: it shows the minutes left
+   until your next break, teal while you're fine, amber in the last 5
+   minutes, and red in the final minute (counting seconds). Blue means
+   you're on a break; gray pause bars mean the timer is paused.
    Short thinking pauses don't stop the clock, but if you walk away for a
    few minutes on your own, the app credits it as a break and resets.
 2. **60s before** — a banner slides in at the top of the screen:

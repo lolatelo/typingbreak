@@ -1,22 +1,28 @@
-"""Settings dialog (tkinter)."""
+"""Settings dialog (tkinter/ttk, native Windows theming)."""
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 from . import config as config_mod
 
-
-class SettingsDialog:
-    FIELDS = [
+SECTIONS = [
+    ("Timing", [
         ("work_minutes", "Work interval (minutes)", float),
         ("break_minutes", "Break length (minutes)", float),
+        ("natural_break_minutes", "Idle time that counts as a break (minutes)", float),
+    ]),
+    ("Warnings", [
         ("warning_seconds", "Heads-up banner (seconds before break)", int),
         ("dim_seconds", "Screen dim starts (seconds before break)", int),
-        ("natural_break_minutes", "Idle time that counts as a break (minutes)", float),
-        ("skips_per_day", "Emergency skips per day", int),
+    ]),
+    ("Emergency skips", [
+        ("skips_per_day", "Skips allowed per day", int),
         ("hold_to_skip_seconds", "Hold-to-skip duration (seconds)", int),
-    ]
+    ]),
+]
 
+
+class SettingsDialog:
     def __init__(self, root: tk.Tk, cfg, on_saved):
         self.cfg = cfg
         self.on_saved = on_saved
@@ -25,45 +31,57 @@ class SettingsDialog:
         self.win.attributes("-topmost", True)
         self.win.resizable(False, False)
 
-        body = tk.Frame(self.win, padx=16, pady=12)
-        body.pack()
+        try:
+            ttk.Style(self.win).theme_use("vista")
+        except tk.TclError:
+            pass
+
+        body = ttk.Frame(self.win, padding=(16, 12))
+        body.pack(fill="both", expand=True)
+
         self.vars = {}
-        for row, (name, label, _cast) in enumerate(self.FIELDS):
-            tk.Label(body, text=label, anchor="w").grid(
-                row=row, column=0, sticky="w", pady=3, padx=(0, 12)
-            )
-            var = tk.StringVar(value=str(getattr(cfg, name)))
-            self.vars[name] = var
-            tk.Entry(body, textvariable=var, width=8, justify="right").grid(
-                row=row, column=1, pady=3
-            )
+        self.casts = {}
+        for title, fields in SECTIONS:
+            box = ttk.LabelFrame(body, text=title, padding=(12, 8))
+            box.pack(fill="x", pady=(0, 10))
+            box.columnconfigure(0, weight=1)
+            for row, (name, label, cast) in enumerate(fields):
+                ttk.Label(box, text=label).grid(
+                    row=row, column=0, sticky="w", pady=3, padx=(0, 12)
+                )
+                var = tk.StringVar(value=str(getattr(cfg, name)))
+                self.vars[name] = var
+                self.casts[name] = cast
+                ttk.Entry(box, textvariable=var, width=7,
+                          justify="right").grid(row=row, column=1, pady=3)
 
-        row = len(self.FIELDS)
+        behavior = ttk.LabelFrame(body, text="Behavior", padding=(12, 8))
+        behavior.pack(fill="x", pady=(0, 10))
         self.lock_var = tk.BooleanVar(value=cfg.lock_on_bypass)
-        tk.Checkbutton(
-            body, text="Lock Windows if I fight the break screen",
+        ttk.Checkbutton(
+            behavior, text="Lock Windows if I fight the break screen",
             variable=self.lock_var,
-        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(8, 0))
-
+        ).pack(anchor="w", pady=2)
         self.autostart_var = tk.BooleanVar(value=config_mod.autostart_enabled())
-        tk.Checkbutton(
-            body, text="Start automatically when I log in",
+        ttk.Checkbutton(
+            behavior, text="Start automatically when I log in",
             variable=self.autostart_var,
-        ).grid(row=row + 1, column=0, columnspan=2, sticky="w")
+        ).pack(anchor="w", pady=2)
 
-        buttons = tk.Frame(body)
-        buttons.grid(row=row + 2, column=0, columnspan=2, pady=(14, 0))
-        tk.Button(buttons, text="Save", width=10, command=self._save).pack(
-            side="left", padx=4
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(
+            side="right", padx=(6, 0)
         )
-        tk.Button(buttons, text="Cancel", width=10, command=self.win.destroy).pack(
-            side="left", padx=4
-        )
+        ttk.Button(buttons, text="Save", command=self._save,
+                   default="active").pack(side="right")
+        self.win.bind("<Return>", lambda _e: self._save())
+        self.win.bind("<Escape>", lambda _e: self.win.destroy())
 
     def _save(self) -> None:
         try:
-            for name, _label, cast in self.FIELDS:
-                value = cast(self.vars[name].get())
+            for name, var in self.vars.items():
+                value = self.casts[name](var.get())
                 if value < 0:
                     raise ValueError(name)
                 setattr(self.cfg, name, value)

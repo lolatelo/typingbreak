@@ -23,7 +23,7 @@ class App(Listener):
         self.cfg = cfg
         self.root = tk.Tk()
         self.root.withdraw()
-        self.banner = Banner(self.root, on_start_now=self._break_now)
+        self.banner = Banner(self.root, cfg, on_start_now=self._break_now)
         self.dim = DimLayer(self.root)
         self.overlay = BreakOverlay(self.root, cfg, on_skip=self._skip_break)
         self.engine = Engine(cfg, idle_seconds, self, config_mod.SkipStore())
@@ -33,6 +33,7 @@ class App(Listener):
 
     def on_work_tick(self, remaining: float) -> None:
         self.tray.set_status(f"Break in {_fmt(remaining)}")
+        self.tray.set_countdown("work", remaining)
         if remaining <= self.cfg.warning_seconds:
             self.banner.update(remaining)
         else:
@@ -46,10 +47,12 @@ class App(Listener):
         self.banner.hide()
         self.dim.hide()
         self.tray.set_status("On break 🙌")
+        self.tray.set_countdown("break", duration)
         self.overlay.show(duration, self.engine.skips_left())
 
     def on_break_tick(self, remaining: float) -> None:
         self.tray.set_status(f"On break — {_fmt(remaining)} left")
+        self.tray.set_countdown("break", remaining)
         self.overlay.update(remaining)
 
     def on_break_end(self, completed: bool) -> None:
@@ -61,6 +64,7 @@ class App(Listener):
         self.dim.hide()
         if reason == "paused":
             self.tray.set_status("Paused")
+            self.tray.set_countdown("paused")
 
     # ---- actions -------------------------------------------------------
 
