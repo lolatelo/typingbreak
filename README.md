@@ -22,20 +22,31 @@ stretch to do while you wait.
    button if you're ready early).
 3. **30s before** — the screen begins to dim gradually (click-through, so
    you can still finish the sentence).
-4. **Break** — a full-screen, undismissable overlay shows the countdown and
-   rotates through wrist/elbow stretches. When it ends, the screen returns
-   and a fresh cycle starts.
+4. **Break** — every monitor is covered: your primary screen gets the full
+   break view (countdown ring + rotating wrist/elbow stretches) and any
+   other monitor gets a clean "On break" cover with the countdown. When it
+   ends, the screens return and a fresh cycle starts.
 
 ### Enforcement
 
-- The overlay can't be closed with Esc or Alt+F4 and re-asserts itself every
+- The overlay can't be closed with Alt+F4 and re-asserts itself every
   second. If you actively fight it (repeatedly working around it), it
   **locks Windows for real** (`LockWorkStation`).
 - **Emergency skips:** 2 per day (configurable). Using one requires holding
-  the skip button for a full 5 seconds — enough friction that you won't do
-  it reflexively.
+  the **Esc key** (or the on-screen button) for a full 5 seconds — enough
+  friction that you won't do it reflexively. Releasing early cancels.
 - Honest caveat: killing the process from Task Manager will always work.
   The app is a commitment device, not a jailer.
+
+### Adherence score
+
+The tray menu shows a running line — *"Today: 5 taken · 1 skipped ·
+score 83"* — and clicking it opens the full breakdown. The score starts at
+100 each day: completed breaks and rest you take on your own count for
+you; skipped breaks count against you; bypass lockouts count double
+against you. The window also lists your last week so you can watch the
+habit build. Stats live locally in
+`%APPDATA%\TypingBreakReminder\state.json` and never leave your machine.
 
 ### Privacy
 

@@ -10,6 +10,7 @@ from .activity import idle_seconds
 from .engine import Engine, Listener, Phase
 from .overlay import Banner, BreakOverlay, DimLayer
 from .settings_ui import SettingsDialog
+from .stats_ui import StatsWindow
 from .tray import Tray
 
 
@@ -23,11 +24,28 @@ class App(Listener):
         self.cfg = cfg
         self.root = tk.Tk()
         self.root.withdraw()
+        self.stats = config_mod.DayStats()
         self.banner = Banner(self.root, cfg, on_start_now=self._break_now)
         self.dim = DimLayer(self.root)
-        self.overlay = BreakOverlay(self.root, cfg, on_skip=self._skip_break)
-        self.engine = Engine(cfg, idle_seconds, self, config_mod.SkipStore())
+        self.overlay = BreakOverlay(
+            self.root, cfg, on_skip=self._skip_break,
+            on_lock=lambda: self._record("lockouts"),
+        )
+        self.engine = Engine(cfg, idle_seconds, self, self.stats)
         self.tray = Tray()
+        self._refresh_stats_line()
+
+    def _record(self, key: str) -> None:
+        self.stats.record(key)
+        self._refresh_stats_line()
+
+    def _refresh_stats_line(self) -> None:
+        today = self.stats.today()
+        taken = today["breaks_completed"] + today["natural_breaks"]
+        self.tray.set_stats_line(
+            f"Today: {taken} taken · {today['breaks_skipped']} skipped"
+            f" · score {self.stats.score(today)}"
+        )
 
     # ---- engine callbacks (main thread) --------------------------------
 
@@ -57,12 +75,18 @@ class App(Listener):
 
     def on_break_end(self, completed: bool) -> None:
         self.overlay.hide()
-        self.tray.set_status("Fresh cycle started")
+        self._record("breaks_completed" if completed else "breaks_skipped")
+        self.tray.set_status(
+            "Nice — break done. Fresh cycle!" if completed
+            else "Break skipped — fresh cycle"
+        )
 
     def on_clock_reset(self, reason: str) -> None:
         self.banner.hide()
         self.dim.hide()
-        if reason == "paused":
+        if reason == "you rested on your own":
+            self._record("natural_breaks")
+        elif reason == "paused":
             self.tray.set_status("Paused")
             self.tray.set_countdown("paused")
 
@@ -107,6 +131,8 @@ class App(Listener):
                 self.engine.resume()
             elif cmd == "settings":
                 self._open_settings()
+            elif cmd == "stats":
+                StatsWindow(self.root, self.stats)
             elif cmd == "quit":
                 self._quit()
 

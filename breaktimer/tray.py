@@ -78,6 +78,7 @@ class Tray:
         self.commands: "queue.Queue[str]" = queue.Queue()
         self.icon = None
         self._status = "Starting…"
+        self._stats_line = "Today: no breaks yet"
         self._face = None  # (text, color) currently drawn on the icon
 
     def start(self) -> None:
@@ -90,6 +91,7 @@ class Tray:
 
         menu = pystray.Menu(
             pystray.MenuItem(lambda _i: self._status, None, enabled=False),
+            pystray.MenuItem(lambda _i: self._stats_line, push("stats")),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Take a break now", push("break_now")),
             pystray.MenuItem(
@@ -115,6 +117,9 @@ class Tray:
         self._status = text
         if self.icon is not None:
             self.icon.title = text  # hover tooltip
+
+    def set_stats_line(self, text: str) -> None:
+        self._stats_line = text  # read lazily when the menu opens
 
     def set_countdown(self, state: str, remaining=None) -> None:
         """Redraw the icon face if the displayed value changed."""

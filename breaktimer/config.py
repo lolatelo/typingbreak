@@ -75,46 +75,78 @@ def save_config(cfg: Config) -> None:
         json.dump(asdict(cfg), f, indent=2)
 
 
-class SkipStore:
-    """Persists how many emergency skips have been used today."""
+STAT_KEYS = ("skips_used", "breaks_completed", "breaks_skipped",
+             "natural_breaks", "lockouts")
+
+
+class DayStats:
+    """Per-day adherence stats (and the skip allowance), persisted to disk.
+
+    Also computes a Lookaway-style adherence score: completed and self-taken
+    breaks count for you, skipped breaks count against you, and bypass
+    lockouts count double against you. No events yet = a fresh 100.
+    """
+
+    KEEP_DAYS = 14
 
     def __init__(self) -> None:
-        self._date = ""
-        self._used = 0
-        self._load()
-
-    def _load(self) -> None:
+        self.days = {}
         try:
             with open(_state_path(), "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self._date = data.get("date", "")
-            self._used = int(data.get("skips_used", 0))
+            if "days" in data:
+                self.days = {
+                    day: {k: int(stats.get(k, 0)) for k in STAT_KEYS}
+                    for day, stats in data["days"].items()
+                }
+            elif "date" in data:  # legacy v1.x skip-only format
+                legacy = dict.fromkeys(STAT_KEYS, 0)
+                legacy["skips_used"] = int(data.get("skips_used", 0))
+                self.days[data["date"]] = legacy
         except (OSError, ValueError):
             pass
-        self._roll_day()
+
+    def _today(self) -> dict:
+        key = datetime.date.today().isoformat()
+        return self.days.setdefault(key, dict.fromkeys(STAT_KEYS, 0))
 
     def _save(self) -> None:
+        keep = sorted(self.days)[-self.KEEP_DAYS:]
+        self.days = {day: self.days[day] for day in keep}
         try:
             with open(_state_path(), "w", encoding="utf-8") as f:
-                json.dump({"date": self._date, "skips_used": self._used}, f)
+                json.dump({"days": self.days}, f, indent=1)
         except OSError:
             pass
 
-    def _roll_day(self) -> None:
-        today = datetime.date.today().isoformat()
-        if self._date != today:
-            self._date = today
-            self._used = 0
-            self._save()
+    def record(self, key: str, n: int = 1) -> None:
+        self._today()[key] += n
+        self._save()
 
+    # -- the skip allowance (API the engine uses) --
     def used_today(self) -> int:
-        self._roll_day()
-        return self._used
+        return self._today()["skips_used"]
 
     def use_one(self) -> None:
-        self._roll_day()
-        self._used += 1
-        self._save()
+        self.record("skips_used")
+
+    # -- reporting --
+    def today(self) -> dict:
+        return dict(self._today())
+
+    @staticmethod
+    def score(stats: dict) -> int:
+        good = stats["breaks_completed"] + stats["natural_breaks"]
+        bad = stats["breaks_skipped"] + 2 * stats["lockouts"]
+        if good + bad == 0:
+            return 100
+        return round(100 * good / (good + bad))
+
+    def history(self, n: int = 7):
+        """[(iso_date, stats)] for the most recent days, newest first."""
+        self._today()  # make sure today exists
+        return [(day, dict(self.days[day]))
+                for day in sorted(self.days)[-n:]][::-1]
 
 
 def autostart_command() -> str:

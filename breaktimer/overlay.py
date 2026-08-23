@@ -36,6 +36,34 @@ def _virtual_screen():
     return 0, 0, None, None
 
 
+def _monitors():
+    """List of (x, y, width, height) per physical monitor, primary first.
+
+    The primary monitor always has its origin at (0, 0) in Windows virtual
+    screen coordinates. Falls back to one entry on other platforms.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        rects = []
+        proc = ctypes.WINFUNCTYPE(
+            ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.POINTER(wintypes.RECT), ctypes.c_void_p,
+        )
+
+        def _cb(_hmon, _hdc, rect_ptr, _lparam):
+            r = rect_ptr.contents
+            rects.append((r.left, r.top, r.right - r.left, r.bottom - r.top))
+            return 1
+
+        ctypes.windll.user32.EnumDisplayMonitors(None, None, proc(_cb), 0)
+        if rects:
+            rects.sort(key=lambda r: (r[0] != 0 or r[1] != 0, r[0], r[1]))
+            return rects
+    return [None]
+
+
 def _make_click_through(win: tk.Toplevel) -> None:
     """Let mouse/keyboard events pass through this window (Windows only)."""
     if sys.platform != "win32":
@@ -160,11 +188,14 @@ class BreakOverlay:
     accumulate strikes; enough strikes locks the workstation for real.
     """
 
-    def __init__(self, root: tk.Tk, cfg, on_skip):
+    def __init__(self, root: tk.Tk, cfg, on_skip, on_lock=None):
         self.root = root
         self.cfg = cfg
         self.on_skip = on_skip  # callback -> bool (True if skip granted)
+        self.on_lock = on_lock  # called just before a bypass lockout
         self.win = None
+        self.covers = []   # plain "on break" screens for secondary monitors
+        self.cover_texts = []  # (canvas-owner window, countdown label)
         self.strikes = 0
         self.stretch_index = 0
         self.shown_at = 0.0
@@ -173,19 +204,43 @@ class BreakOverlay:
 
     # ---- lifecycle -----------------------------------------------------
 
+    def _new_fullscreen(self, rect) -> tk.Toplevel:
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=BG)
+        if rect is None:
+            rect = (0, 0, win.winfo_screenwidth(), win.winfo_screenheight())
+        x, y, w, h = rect
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.protocol("WM_DELETE_WINDOW", self._on_bypass_attempt)
+        # Holding Esc for the configured time uses an emergency skip.
+        win.bind("<KeyPress-Escape>", self._hold_start)
+        win.bind("<KeyRelease-Escape>", self._hold_end)
+        return win
+
     def show(self, duration: float, skips_left: int) -> None:
         self.strikes = 0
         self.shown_at = time.monotonic()
-        self.win = tk.Toplevel(self.root)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True)
-        self.win.configure(bg=BG)
-        x, y, w, h = _virtual_screen()
-        if w is None:
-            w, h = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
-        self.win.geometry(f"{w}x{h}+{x}+{y}")
-        self.win.protocol("WM_DELETE_WINDOW", self._on_bypass_attempt)
-        self.win.bind("<Escape>", lambda _e: self._on_bypass_attempt())
+        monitors = _monitors()
+
+        # Full break UI on the primary monitor…
+        self.win = self._new_fullscreen(monitors[0])
+
+        # …and a simple dark cover with the countdown on every other one.
+        self.covers = []
+        self.cover_texts = []
+        for rect in monitors[1:]:
+            cover = self._new_fullscreen(rect)
+            box = tk.Frame(cover, bg=BG)
+            box.place(relx=0.5, rely=0.5, anchor="center")
+            tk.Label(box, text="On break", bg=BG, fg="#9aa7b0",
+                     font=("Segoe UI", 18)).pack()
+            label = tk.Label(box, text=_fmt(duration), bg=BG, fg=ACCENT,
+                             font=("Segoe UI", 54, "bold"))
+            label.pack()
+            self.covers.append(cover)
+            self.cover_texts.append(label)
 
         center = tk.Frame(self.win, bg=BG)
         center.place(relx=0.5, rely=0.5, anchor="center")
@@ -229,11 +284,13 @@ class BreakOverlay:
         self.stretch_body.pack(pady=(8, 0))
         self._show_stretch()
 
+        self.skips_left = skips_left
         if skips_left > 0:
             hold = self.cfg.hold_to_skip_seconds
             self.skip_label = tk.Label(
                 center,
-                text=f"Emergency? Hold {hold}s to skip  ({skips_left} left today)",
+                text=(f"Emergency? Hold Esc (or this button) {hold}s to skip"
+                      f"  ({skips_left} left today)"),
                 bg="#2a2f36", fg="#8a949c", font=("Segoe UI", 10),
                 padx=14, pady=6, cursor="hand2",
             )
@@ -241,6 +298,7 @@ class BreakOverlay:
             self.skip_label.bind("<ButtonPress-1>", self._hold_start)
             self.skip_label.bind("<ButtonRelease-1>", self._hold_end)
         else:
+            self.skip_label = None
             tk.Label(
                 center, text="No emergency skips left today.",
                 bg=BG, fg="#5a646c", font=("Segoe UI", 10),
@@ -251,6 +309,10 @@ class BreakOverlay:
 
     def hide(self) -> None:
         self._cancel_hold_job()
+        for cover in self.covers:
+            cover.destroy()
+        self.covers = []
+        self.cover_texts = []
         if self.win is not None:
             self.win.destroy()
             self.win = None
@@ -268,6 +330,8 @@ class BreakOverlay:
         self.ring.itemconfigure(
             self.ring_arc, extent=-359.9 * min(remaining / self.total, 1.0)
         )
+        for label in self.cover_texts:
+            label.configure(text=_fmt(remaining))
         # Rotate the stretch every 45 seconds.
         elapsed = int(time.monotonic() - self.shown_at)
         index = elapsed // 45
@@ -280,12 +344,23 @@ class BreakOverlay:
         """Keep the overlay on top and focused; escalate if it's being fought."""
         if self.win is None:
             return
-        self.win.attributes("-topmost", True)
-        self.win.lift()
-        self.win.deiconify()
+        for win in [self.win, *self.covers]:
+            win.attributes("-topmost", True)
+            win.lift()
+            win.deiconify()
         if sys.platform == "win32" and self._foreground_stolen():
             self.win.focus_force()
             self._on_bypass_attempt()
+
+    def _our_hwnds(self):
+        import ctypes
+
+        hwnds = set()
+        for win in [self.win, *self.covers]:
+            wid = win.winfo_id()
+            hwnds.add(wid)
+            hwnds.add(ctypes.windll.user32.GetParent(wid) or wid)
+        return hwnds
 
     def _foreground_stolen(self) -> bool:
         import ctypes
@@ -294,13 +369,14 @@ class BreakOverlay:
         if time.monotonic() - self.shown_at < 3:
             return False
         fg = ctypes.windll.user32.GetForegroundWindow()
-        hwnd = ctypes.windll.user32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
-        return fg not in (hwnd, self.win.winfo_id()) and fg != 0
+        return fg != 0 and fg not in self._our_hwnds()
 
     def _on_bypass_attempt(self) -> None:
         self.strikes += 1
         if self.strikes >= BYPASS_STRIKES_TO_LOCK and self.cfg.lock_on_bypass:
             self.strikes = 0
+            if self.on_lock is not None:
+                self.on_lock()
             lock_workstation()
 
     # ---- stretch card --------------------------------------------------
@@ -313,6 +389,10 @@ class BreakOverlay:
     # ---- hold-to-skip --------------------------------------------------
 
     def _hold_start(self, _event) -> None:
+        if self.skips_left <= 0:
+            return
+        if self._hold_started is not None:
+            return  # key auto-repeat while already holding
         self._hold_started = time.monotonic()
         self._tick_hold()
 
@@ -325,15 +405,16 @@ class BreakOverlay:
             self._hold_started = None
             self.on_skip()
             return
-        self.skip_label.configure(
-            text=f"Keep holding… {needed - int(held)}s", fg=WARN
-        )
+        if self.skip_label is not None:
+            self.skip_label.configure(
+                text=f"Keep holding… {needed - int(held)}s", fg=WARN
+            )
         self._hold_job = self.win.after(200, self._tick_hold)
 
     def _hold_end(self, _event) -> None:
+        was_holding = self._hold_started is not None
         self._cancel_hold_job()
-        if self._hold_started is not None and self.win is not None:
-            self._hold_started = None
+        if was_holding and self.win is not None and self.skip_label is not None:
             hold = self.cfg.hold_to_skip_seconds
             self.skip_label.configure(
                 text=f"Released too early — hold the full {hold}s to skip",
